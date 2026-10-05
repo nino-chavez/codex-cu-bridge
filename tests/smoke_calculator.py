@@ -1,13 +1,13 @@
 """Manual smoke test: acts as Claude Code against the bridge and DRIVES Calculator on this Mac.
 
-    python3 tests/smoke_calculator.py          # client without approval prompts (allow_app path)
-    python3 tests/smoke_calculator.py elicit   # client with approval prompts (auto-accepts Calculator only)
+    python3 tests/smoke_calculator.py
+
+The first call shows the bridge's macOS approval dialog for Calculator; click "Allow for this session".
 
 Expect: Calculator shows 5 after typing 2+3=, only SkyComputerUseClient under app-server, clean exit.
 """
 import os
 import subprocess,json,sys,threading,time,queue,base64,re
-ELICIT = "elicit" in sys.argv
 b=subprocess.Popen([sys.executable,os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "codex_cu_bridge.py")],stdin=subprocess.PIPE,stdout=subprocess.PIPE)
 q={};nid=[0];lock=threading.Lock()
 def w(o): b.stdin.write((json.dumps(o)+"\n").encode()); b.stdin.flush()
@@ -30,15 +30,12 @@ def call(tool,args,label):
     if r.get("isError"): print("   ",txt[-400:])
     for k,im in enumerate(imgs): open(os.path.join(os.environ.get("TMPDIR","/tmp"),f"codex-cu-smoke-{label}.jpeg"),"wb").write(base64.b64decode(im["data"]))
     return r
-caps={"elicitation":{}} if ELICIT else {}
+caps={}
 r=req("initialize",{"protocolVersion":"2025-06-18","capabilities":caps,"clientInfo":{"name":"fake-claude","version":"0"}})
 print("instructions present:", bool(r["result"].get("instructions")))
 w({"jsonrpc":"2.0","method":"notifications/initialized"})
 print("tools:",[t["name"] for t in req("tools/list")["result"]["tools"]])
 r=call("get_app_state",{"app":"Calculator"},"read1")
-if r.get("isError") and not ELICIT:
-    call("allow_app",{"app":"Calculator"},"allow")
-    call("get_app_state",{"app":"Calculator"},"read1b")
 # descendants of codex app-server
 out=subprocess.run(["ps","-axo","pid,ppid,command"],capture_output=True,text=True).stdout.splitlines()
 procs={int(l.split()[0]):(int(l.split()[1]),l) for l in out[1:]}

@@ -8,10 +8,10 @@ ChatGPT.app passes that check, and its `app-server` mode exposes
 
     Claude Code -> this bridge -> codex app-server (signed) -> SkyComputerUseClient mcp
 
-Per-app approval prompts arrive as `mcpServer/elicitation/request`. They are
-forwarded to the user as an MCP elicitation when the client supports it, or
-refused with instructions to ask the user and call `allow_app`. The bridge never
-answers "always"; approvals last for this bridge process only.
+Per-app approval prompts arrive as `mcpServer/elicitation/request`. The bridge
+asks the user with its own macOS dialog, because Claude Code declines MCP
+elicitations without showing them. It never answers "always"; approvals last
+for this bridge process only.
 
 Stdlib only. Log: ~/Library/Logs/codex-cu-bridge.log
 """
@@ -43,23 +43,9 @@ INSTRUCTIONS = (
     "Operate native Mac apps (Calculator, Notes, Finder, System Settings, ...) through Codex Computer Use. "
     "Call get_app_state for an app before acting on it each turn: it returns a screenshot and an accessibility "
     "tree whose element indices click/set_value/scroll accept. Work runs in the background without moving the "
-    "user's mouse. The first use of each app needs the user's approval; never call allow_app unless the user "
-    "agreed in chat. For web pages, use a browser tool instead."
+    "user's mouse. The first use of each app shows the user a macOS approval dialog; "
+    "if they decline, do not work around it. For web pages, use a browser tool instead."
 )
-ALLOW_APP_TOOL = {
-    "name": "allow_app",
-    "description": (
-        "Approve an app for Codex Computer Use for the rest of this bridge session. Only call this after the user "
-        "has explicitly agreed in chat to let you control that app. Pass the app name as shown in the approval "
-        "error (e.g. 'Calculator')."
-    ),
-    "inputSchema": {
-        "type": "object",
-        "properties": {"app": {"type": "string", "description": "App display name, e.g. Calculator"}},
-        "required": ["app"],
-        "additionalProperties": False,
-    },
-}
 
 
 def log(*parts):
@@ -152,7 +138,7 @@ class Rpc:
 class Bridge:
     def __init__(self):
         self.client = Rpc(sys.stdout.buffer, "client")
-        self.client_can_elicit = False
+        self.dialog_lock = threading.Lock()
         self.allowed = set()  # lower-cased app names approved this session
         self.last_denied = None  # app refused for lack of approval during the current call
         self.proc = None
@@ -264,30 +250,32 @@ class Bridge:
         rpc.respond(msg["id"], result={"action": "accept", "content": {}} if ok else {"action": "decline"})
 
     def _approve(self, app):
+        """Ask the user with a native macOS dialog. Claude Code advertises elicitation but, in both the desktop
+        app and `claude -p`, declines it instantly without showing anything (measured 2026-10-05)."""
         if app.lower() in self.allowed:
             return True
-        if not self.client_can_elicit:
-            self.last_denied = (app, "no-prompt")
-            return False
-        self.last_denied = (app, "no-answer")
-        try:
-            resp = self.client.request(
-                "elicitation/create",
-                {
-                    "message": f"Let Claude control {app} through Codex Computer Use for this session?",
-                    "requestedSchema": {"type": "object", "properties": {}},
-                },
-                APPROVAL_TIMEOUT,
+        with self.dialog_lock:
+            if app.lower() in self.allowed:
+                return True
+            safe = app.replace("\\", "").replace('"', "")
+            script = (
+                f'display dialog "Let Claude control {safe} through Codex Computer Use?" & return & return & '
+                f'"Applies until this Claude session ends." with title "codex-cu" '
+                f'buttons {{"Don\'t Allow", "Allow for this session"}} default button "Allow for this session" '
+                f'cancel button "Don\'t Allow" with icon caution giving up after {APPROVAL_TIMEOUT}'
             )
-        except TimeoutError:
+            try:
+                out = subprocess.run(["osascript", "-e", script], capture_output=True, text=True,
+                                     timeout=APPROVAL_TIMEOUT + 10)
+            except subprocess.TimeoutExpired:
+                self.last_denied = (app, "no-answer")
+                return False
+            if "button returned:Allow for this session" in out.stdout and "gave up:true" not in out.stdout:
+                self.allowed.add(app.lower())
+                self.last_denied = None
+                return True
+            self.last_denied = (app, "no-answer" if "gave up:true" in out.stdout else "declined")
             return False
-        action = resp.get("result", {}).get("action")
-        if action == "accept":
-            self.allowed.add(app.lower())
-            self.last_denied = None
-            return True
-        self.last_denied = (app, "declined" if action == "decline" else "no-answer")
-        return False
 
     # ---- Claude side ------------------------------------------------------
 
@@ -315,17 +303,9 @@ class Bridge:
             self.tools_cache = [
                 {k: t[k] for k in ("name", "description", "inputSchema", "annotations") if k in t} for t in tools
             ]
-        return self.tools_cache + ([] if self.client_can_elicit else [ALLOW_APP_TOOL])
+        return self.tools_cache
 
     def call_tool(self, name, args):
-        if name == "allow_app":
-            if self.client_can_elicit:
-                return {"content": [{"type": "text", "text": "allow_app is disabled: this client shows approval prompts to the user directly."}], "isError": True}
-            app = (args.get("app") or "").strip()
-            if not app:
-                return {"content": [{"type": "text", "text": "allow_app needs an app name."}], "isError": True}
-            self.allowed.add(app.lower())
-            return {"content": [{"type": "text", "text": f"{app} approved for this session."}]}
         with self.call_lock:
             self.last_used = time.time()
             self.last_denied = None
@@ -345,13 +325,10 @@ class Bridge:
             if self.last_denied:
                 app, why = self.last_denied
                 if why == "declined":
-                    hint = f"The user declined access to {app}. Do not retry unless they ask you to."
-                elif why == "no-prompt":
-                    hint = (f"The user has not approved {app} yet. Ask them in chat whether you may control {app}. "
-                            f"Only if they agree, call allow_app with app='{app}' and retry.")
+                    hint = f"The user clicked Don't Allow for {app} in the macOS dialog. Do not retry unless they ask."
                 else:
-                    hint = (f"No answer to the approval prompt for {app} (it may not have been shown). Tell the user "
-                            f"and ask them to retry from an interactive session, where the prompt appears.")
+                    hint = (f"The macOS approval dialog for {app} got no answer within {APPROVAL_TIMEOUT}s. Tell the "
+                            f"user; retrying will show the dialog again.")
                 out["content"].append({"type": "text", "text": hint})
         if "structuredContent" in result:
             out["structuredContent"] = result["structuredContent"]
@@ -362,8 +339,7 @@ class Bridge:
         try:
             if method == "initialize":
                 params = msg.get("params") or {}
-                self.client_can_elicit = "elicitation" in (params.get("capabilities") or {})
-                log("client", params.get("clientInfo"), "elicitation:", self.client_can_elicit)
+                log("client", params.get("clientInfo"))
                 self.client.respond(rid, {
                     "protocolVersion": params.get("protocolVersion", "2025-06-18"),
                     "capabilities": {"tools": {"listChanged": False}},
@@ -395,8 +371,8 @@ class Bridge:
             except ValueError:
                 continue
             if "method" not in msg:
-                self.client.resolve(msg)  # a reply to our elicitation/create
-            elif msg["method"] == "tools/call":
+                continue
+            if msg["method"] == "tools/call":
                 threading.Thread(target=self.handle, args=(msg,), daemon=True).start()
             else:
                 self.handle(msg)

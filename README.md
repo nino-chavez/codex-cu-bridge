@@ -22,17 +22,11 @@ Claude Code
 
 The ten Codex tools pass through unchanged: `list_apps`, `get_app_state`, `click`, `perform_secondary_action`, `set_value`, `select_text`, `scroll`, `drag`, `press_key`, `type_text`. Call `get_app_state` for an app before acting on it each turn.
 
-### allow_app
-
-    allow_app(app: "Calculator")
-
-Approves one app for the rest of the session. It exists for clients that cannot show an approval prompt. Claude calls it only after you agree in chat.
-
 ## Approvals
 
-- The first use of each app asks Codex for permission. The bridge passes that request to Claude Code, which shows you a prompt.
-- Accepting approves the app for this session only. The bridge never answers "always". Grant permanent access in the Codex app if you want it.
-- A client without prompt support gets a tool error that tells Claude to ask you in chat, then call `allow_app`.
+- The first use of each app in a session opens a macOS dialog from the bridge: **Allow for this session** or **Don't Allow**. It gives up after 120 seconds.
+- Approval lasts until the Claude session ends. The bridge never answers "always". Grant permanent access in the Codex app if you want it.
+- The bridge asks with its own dialog because Claude Code advertises MCP elicitation but declines it without showing anything, in both the desktop app and `claude -p` (measured 2026-10-05). A native dialog also cannot be answered by text on an app's screen, so the model has no way to approve an app for itself.
 
 ## Install
 
