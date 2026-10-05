@@ -42,7 +42,9 @@ SERVER = "computer-use"
 INSTRUCTIONS = (
     "Operate native Mac apps (Calculator, Notes, Finder, System Settings, ...) through Codex Computer Use. "
     "Call get_app_state for an app before acting on it each turn: it returns a screenshot and an accessibility "
-    "tree whose element indices click/set_value/scroll accept. Work runs in the background without moving the "
+    "tree whose element indices click/set_value/scroll accept. Indices are valid only for the latest state: "
+    "every action returns a fresh tree and elements can renumber, so never batch several clicks from one "
+    "reading. Prefer type_text/press_key for keyboard-driven input such as numbers and shortcuts. Work runs in the background without moving the "
     "user's mouse. The first use of each app shows the user a macOS approval dialog; "
     "if they decline, do not work around it. For web pages, use a browser tool instead."
 )

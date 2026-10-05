@@ -20,7 +20,7 @@ Claude Code
 
 ## Tools
 
-The ten Codex tools pass through unchanged: `list_apps`, `get_app_state`, `click`, `perform_secondary_action`, `set_value`, `select_text`, `scroll`, `drag`, `press_key`, `type_text`. Call `get_app_state` for an app before acting on it each turn.
+The ten Codex tools pass through unchanged: `list_apps`, `get_app_state`, `click`, `perform_secondary_action`, `set_value`, `select_text`, `scroll`, `drag`, `press_key`, `type_text`. Call `get_app_state` for an app before acting on it each turn. Element indices are valid only for the latest state; each action returns a fresh tree, and elements can renumber after a click. A batch of clicks from one reading hit the wrong Calculator buttons in the first live test, so the server instructions say to re-read between clicks and to prefer `type_text` / `press_key`.
 
 ## Approvals
 
