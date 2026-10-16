@@ -48,3 +48,7 @@ Log: `~/Library/Logs/codex-cu-bridge.log`.
 - **Stalled approval prompts.** app-server holds a pending approval request until the client sends something. The bridge sends a cheap `thread/loaded/list` when the thread reports `waitingOnApproval`. Without it, the first call waited 120 seconds.
 - **No turn boundary.** Codex runs `SkyComputerUseClient turn-ended` after each of its own turns. The bridge never does. Repeated `get_app_state` calls work without it; whether the "using your computer" indicator clears on its own is unverified.
 - **App updates.** Paths are resolved at each start and fail with a message naming what is missing. An update that renames the app-server methods breaks the bridge loudly, not silently.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
